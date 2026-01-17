@@ -1,0 +1,108 @@
+services:
+  lakehouse-catalog:
+    image: postgres:15
+    container_name: lakehouse-catalog
+    environment:
+      POSTGRES_USER: lakehouse
+      POSTGRES_PASSWORD: lakehouse
+      POSTGRES_DB: lakehouse
+    ports:
+      - "5432:5432"
+    volumes:
+      - lakehouse-catalog-data:/var/lib/postgresql/data
+      - ./sql:/sql
+
+  lakehouse-objectstore:
+    image: minio/minio
+    container_name: lakehouse-objectstore
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - lakehouse-objectstore-data:/data
+
+  lakehouse-orchestrator:
+    image: apache/airflow:2.9.3-python3.11
+    container_name: lakehouse-orchestrator
+    depends_on:
+      - lakehouse-catalog
+      - lakehouse-objectstore
+    env_file:
+      - .env
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./logs:/opt/airflow/logs
+    command: webserver
+    ports:
+      - "8080:8080"
+
+  lakehouse-scheduler:
+    image: apache/airflow:2.9.3-python3.11
+    container_name: lakehouse-scheduler
+    depends_on:
+      - lakehouse-orchestrator
+    env_file:
+      - .env
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./logs:/opt/airflow/logs
+    command: scheduler
+
+  lakehouse-airflow-init:
+    image: apache/airflow:2.9.3-python3.11
+    container_name: lakehouse-airflow-init
+    depends_on:
+      - lakehouse-catalog
+    env_file:
+      - .env
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./logs:/opt/airflow/logs
+    entrypoint: /bin/bash
+    command: >
+      -c "
+      airflow db migrate &&
+      airflow users create
+        --username admin
+        --password admin
+        --firstname Admin
+        --lastname User
+        --role Admin
+        --email admin@example.com || true
+      "
+    restart: "no"
+
+  lakehouse-notebook:
+    build:
+      context: .
+      dockerfile: docker/notebook.Dockerfile
+    container_name: lakehouse-notebook
+    depends_on:
+      - lakehouse-objectstore
+    environment:
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://lakehouse-objectstore:9000
+      AWS_EC2_METADATA_DISABLED: "true"
+      DUCKDB_DATABASE: /home/jovyan/lakehouse.duckdb
+      DUCKDB_THREADS: 8
+      JUPYTER_TOKEN: ""
+      JUPYTER_PASSWORD: ""
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - ./src:/home/jovyan/src
+    ports:
+      - "8888:8888"
+
+
+volumes:
+  lakehouse-catalog-data:
+  lakehouse-objectstore-data:
